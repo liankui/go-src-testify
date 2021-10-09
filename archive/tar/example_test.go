@@ -9,8 +9,11 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -110,13 +113,14 @@ func TestTarOneFile(t *testing.T) {
 	log.Printf("共写入了%d个字符数", written)
 }
 
-func TestUntar(t *testing.T) {
+func TestUnTar2SingleFile(t *testing.T) {
 	srcFile := "test.tar"
 
 	fr, err := os.Open(srcFile)
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer fr.Close()
 
 	tr := tar.NewReader(fr)
 
@@ -124,7 +128,6 @@ func TestUntar(t *testing.T) {
 	//
 	//}
 	for {
-
 		hdr, err := tr.Next()
 		if err == io.EOF {
 			break
@@ -149,4 +152,118 @@ func TestUntar(t *testing.T) {
 
 		fw.Close()
 	}
+}
+
+func TestTarFiles(t *testing.T) {
+	src := "test"
+	dst := src + ".tar"
+
+	err := Tar(src, dst)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func Tar(src, dst string) error {
+	fw, err := os.Create(dst)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer fw.Close()
+
+	//gw := gzip.NewWriter(fw)
+	//defer gw.Close()
+
+	tw := tar.NewWriter(fw)
+	defer tw.Close()
+
+	return filepath.Walk(src, func(fileName string, fi fs.FileInfo, err error) error {
+		hdr, err := tar.FileInfoHeader(fi, "")
+		if err != nil {
+			return err
+		}
+
+		hdr.Name = strings.TrimPrefix(fileName, string(filepath.Separator))
+
+		err = tw.WriteHeader(hdr)
+		if err != nil {
+			return err
+		}
+
+		// 判断下文件是否是标准文件，如果不是就不处理了，
+		if !fi.Mode().IsRegular() {
+			return nil
+		}
+
+		fr, err := os.Open(fileName)
+		if err != nil {
+			return err
+		}
+
+		written, err := io.Copy(tw, fr)
+		if err != nil {
+			return err
+		}
+
+		log.Printf("成功打包 %s ，共写入了 %d 字节的数据\n", fileName, written)
+
+		return nil
+	})
+}
+
+func TestUnTar(t *testing.T) {
+	src := "test.tar"
+	dst := ""
+
+	err := UnTar(dst, src)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func UnTar(dst, src string) error {
+	fr, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer fr.Close()
+
+	tr := tar.NewReader(fr)
+
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if hdr == nil {
+			continue
+		}
+
+		dstFileDir := filepath.Join(dst, hdr.Name)
+		fmt.Println("dstFileDir:", dstFileDir)
+
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err = os.MkdirAll(dstFileDir, 0775); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			file, err := os.OpenFile(dstFileDir, os.O_CREATE|os.O_RDWR, os.FileMode(hdr.Mode))
+			if err != nil {
+				return err
+			}
+
+			written, err := io.Copy(file, tr)
+			if err != nil {
+				log.Fatal(err)
+			}
+			log.Printf("解压 %s，共%d个字符数", src, written)
+
+			file.Close()
+		}
+	}
+	return nil
 }
